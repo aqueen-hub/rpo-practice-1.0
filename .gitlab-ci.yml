@@ -1,10 +1,10 @@
-# .gitlab-ci.yml
 workflow:
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "main"
 
 stages:
   - build
+  - test
 
 build:
   stage: build
@@ -17,3 +17,16 @@ build:
   artifacts:
     paths:
       - target/*.jar
+
+sast:
+  stage: test
+  tags:
+    - saas-linux-small-amd64
+  image: semgrep/semgrep
+  script:
+    - semgrep --config=auto --json --output gl-sast-report.json .
+  artifacts:
+    reports:
+      sast: gl-sast-report.json
+    paths:
+      - gl-sast-report.json
