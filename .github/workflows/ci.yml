@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container: eclipse-temurin:21
+
+    steps:
+      - uses: actions/checkout@v4
+      - name: Make mvnw executable
+        run: chmod +x mvnw
+      - name: Build with Maven
+        run: ./mvnw clean package
+      - name: Upload JAR artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: jar
+          path: target/*.jar
+
+  security:
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run Semgrep
+        run: |
+          docker run --rm -v "${PWD}:/src" semgrep/semgrep semgrep --config=auto --sarif --output results.sarif /src
+      - name: Upload SARIF report
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: results.sarif
