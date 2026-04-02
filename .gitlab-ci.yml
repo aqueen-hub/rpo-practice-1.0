@@ -8,8 +8,7 @@ stages:
 
 build:
   stage: build
-  tags:
-    - saas-linux-small-amd64
+
   image: eclipse-temurin:21
   script:
     - chmod +x mvnw
