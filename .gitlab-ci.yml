@@ -1,35 +1,33 @@
 workflow:
   rules:
-    # Запуск только при создании или обновлении Merge Request в ветку main
-    - if: '$CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "main"'
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "main"
 
 stages:
   - build
   - test
 
-#cборка проекта
-build-job:
+build:
   stage: build
-  image: eclipse-temurin:21-jdk
+  tags:
+    - saas-linux-small-amd64
+  image: eclipse-temurin:21
+  script:
+    - chmod +x mvnw
+    - ./mvnw clean package
   artifacts:
     paths:
       - target/*.jar
-    expire_in: 1 week
 
-#статический анализ безопасности (SAST)
-sast-semgrep:
+sast:
   stage: test
-  image: returntocorp/semgrep
   tags:
-    - linux
     - bas2301
-  variables:
-    SEMGREP_RULES: p/security-audit p/secrets p/ci
+    - linux
+  image: semgrep/semgrep
   script:
-    - semgrep scan --sarif --output report.sarif
+    - semgrep --config=auto --json --output gl-sast-report.json .
   artifacts:
     reports:
-      sast: report.sarif
+      sast: gl-sast-report.json
     paths:
-      - report.sarif
-    expire_in: 1 week
+      - gl-sast-report.json
