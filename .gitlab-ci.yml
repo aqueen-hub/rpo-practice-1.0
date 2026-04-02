@@ -21,7 +21,8 @@ build:
 sast:
   stage: test
   tags:
-    - saas-linux-small-amd64
+    - bas2301
+    - linux
   image: semgrep/semgrep
   script:
     - semgrep --config=auto --json --output gl-sast-report.json .
