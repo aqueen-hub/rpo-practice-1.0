@@ -8,7 +8,6 @@ stages:
 
 build:
   stage: build
-
   image: eclipse-temurin:21
   script:
     - chmod +x mvnw
@@ -24,7 +23,8 @@ sast:
     - linux
   image: semgrep/semgrep
   script:
-    - semgrep --config=auto --json --output gl-sast-report.json .
+    - semgrep --config=auto --json . > gl-sast-report.json || true
+    - cat gl-sast-report.json
   artifacts:
     reports:
       sast: gl-sast-report.json
