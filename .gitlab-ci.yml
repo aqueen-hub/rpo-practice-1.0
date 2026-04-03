@@ -1,6 +1,6 @@
 workflow:
   rules:
-    - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "main"
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "main"'
 
 stages:
   - build
@@ -23,8 +23,7 @@ sast:
     - linux
   image: semgrep/semgrep
   script:
-    - semgrep --config=auto --json . > gl-sast-report.json || true
-    - cat gl-sast-report.json
+    - semgrep --config=auto --json . > gl-sast-report.json
   artifacts:
     reports:
       sast: gl-sast-report.json
