@@ -39,23 +39,30 @@ jobs:
     needs: build
     steps:
       - uses: actions/checkout@v4
+
       - name: Set up JDK 21
         uses: actions/setup-java@v4
         with:
           java-version: '21'
           distribution: 'temurin'
+          cache: 'maven'
+
       - name: Make mvnw executable
         run: chmod +x mvnw
+
       - name: Run OWASP Dependency Check
+        # Добавляем 'install', чтобы мавен скачал все зависимости и подготовил проект,
+        # иначе плагину нечего будет проверять на чистом сервере
         run: |
           mkdir -p /tmp/dc-data
-          chmod 777 /tmp/dc-data
-          # Запускаем проверку
+          ./mvnw install -DskipTests # Сначала собираем зависимости
           ./mvnw org.owasp:dependency-check-maven:check -DdataDirectory=/tmp/dc-data
+
       - name: Upload HTML report
         uses: actions/upload-artifact@v4
-        if: always() # Загружать отчет даже если проверка провалена
+        # ВОТ ЭТА СТРОЧКА — СПАСЕНИЕ. Она заставит GitHub загрузить отчет, даже если билд упал
+        if: always()
         with:
           name: dependency-check-report
-          # Используем маску, чтобы найти файл, где бы он ни лежал в target
-          path: "target/dependency-check-report*"
+          # Используем маску **, чтобы он нашел файл, даже если он в подпапке
+          path: "target/dependency-check-report.html"
