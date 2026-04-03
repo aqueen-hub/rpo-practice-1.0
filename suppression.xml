@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<suppressions xmlns="https://jeremylong.github.io/DependencyCheck/dependency-suppression.1.3.xsd">
+    <!-- Пример подавления ложного срабатывания -->
+    <suppress>
+        <notes><![CDATA[
+        file name: some-library-1.0.jar
+        ]]></notes>
+        <packageUrl regex="true">^pkg:maven/org\.some/library@1\.0$</packageUrl>
+        <cve>CVE-2023-XXXXX</cve>
+    </suppress>
+</suppressions>
