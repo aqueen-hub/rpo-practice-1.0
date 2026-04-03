@@ -30,3 +30,15 @@ sast:
       sast: gl-sast-report.json
     paths:
       - gl-sast-report.json
+
+dependency-check:
+  stage: test
+  tags:
+    - bas2301
+    - linux
+  image: maven:3.9-eclipse-temurin-21
+  script:
+    - ./mvnw org.owasp:dependency-check-maven:check
+  artifacts:
+    paths:
+      - target/dependency-check-report/dependency-check-report.html
