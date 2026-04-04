@@ -1,0 +1,136 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [ main ]
+  push:
+    branches: [ main ]
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+  packages: write # Нужно для пуша в реестр образов
+
+jobs:
+  # 1. ПОИСК СЕКРЕТОВ
+  secrets-scan:
+    name: Gitleaks Scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Gitleaks Scan
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # 2. СБОРКА
+  build:
+    name: Build
+    needs: secrets-scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+          cache: maven
+      - name: Build with Maven
+        run: chmod +x mvnw && ./mvnw clean package -DskipTests
+      - name: Upload JAR
+        uses: actions/upload-artifact@v4
+        with:
+          name: jar
+          path: target/*.jar
+
+  # 3. БЕЗОПАСНОСТЬ КОНТЕЙНЕРОВ (Новый этап!)
+  docker-security:
+    name: Docker Build, Scan and Push
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download JAR
+        uses: actions/download-artifact@v4
+        with:
+          name: jar
+          path: target
+      - name: Build Docker Image
+        run: docker build -t ghcr.io/${{ github.repository }}:latest .
+      - name: Run Trivy Scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: 'ghcr.io/${{ github.repository }}:latest'
+          format: 'table'
+          exit-code: '1' # Уронит пайплайн если найдет критические уязвимости
+          ignore-unfixed: true
+          vuln-type: 'os,library'
+          severity: 'CRITICAL,HIGH'
+      - name: Login to GHCR
+        if: success()
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Push Docker Image
+        if: success()
+        run: docker push ghcr.io/${{ github.repository }}:latest
+
+  # 4. ПРОВЕРКА ЗАВИСИМОСТЕЙ (SCA)
+  security:
+    name: Dependency Check
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Dependency Check
+        run: chmod +x mvnw && ./mvnw org.owasp:dependency-check-maven:check || true
+
+  # 5. ДИНАМИЧЕСКИЙ АНАЛИЗ (DAST)
+  dast-baseline:
+    name: ZAP Baseline Scan
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download JAR
+        uses: actions/download-artifact@v4
+        with:
+          name: jar
+          path: target
+      - name: Run App in Background
+        run: java -jar target/*.jar & sleep 30
+      - name: ZAP Baseline Scan
+        uses: zaproxy/action-baseline@v0.13.0
+        with:
+          target: 'http://localhost:8080'
+          fail_action: false
+
+  # 6. ФАЗЗИНГ-ТЕСТИРОВАНИЕ
+  web-fuzzing:
+    name: Web Fuzzing (ffuf)
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download JAR
+        uses: actions/download-artifact@v4
+        with:
+          name: jar
+          path: target
+      - name: Run App in Background
+        run: java -jar target/*.jar & sleep 30
+      - name: Install ffuf
+        run: |
+          wget https://github.com/ffuf/ffuf/releases/download/v2.1.0/ffuf_2.1.0_linux_amd64.tar.gz
+          tar -xf ffuf_2.1.0_linux_amd64.tar.gz
+          sudo mv ffuf /usr/local/bin/
+      - name: Run Fuzzer
+        run: |
+          echo -e "admin\napi\nconfig" > wordlist.txt
+          ffuf -u http://localhost:8080/FUZZ -w wordlist.txt -mc 200,403,401 -o fuzz-results.json

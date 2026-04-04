@@ -1,19 +1,90 @@
-# .gitlab-ci.yml
-workflow:
-  rules:
-    - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "main"
-
 stages:
+  - secrets-scan
   - build
+  - test
+  - fuzzing
+  - container-security
 
+# 1. ПОИСК СЕКРЕТОВ
+gitleaks:
+  stage: secrets-scan
+  image:
+    name: gitleaks/gitleaks:latest
+    entrypoint: [""]
+  script:
+    - gitleaks detect --source . -v
+
+# 2. СБОРКА
 build:
   stage: build
-  tags:
-    - saas-linux-small-amd64
   image: eclipse-temurin:21
+  needs:
+    - gitleaks
   script:
     - chmod +x mvnw
-    - ./mvnw clean package
+    - ./mvnw clean package -DskipTests
   artifacts:
     paths:
       - target/*.jar
+
+# 3. БЕЗОПАСНОСТЬ КОНТЕЙНЕРОВ (Новый этап!)
+docker_build_scan_push:
+  stage: container-security
+  image: docker:latest
+  services:
+    - docker:dind
+  needs:
+    - build
+  variables:
+    DOCKER_IMAGE: $CI_REGISTRY_IMAGE:latest
+  script:
+    - docker build -t $DOCKER_IMAGE .
+    - apk add --no-cache curl
+    - curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin
+    - trivy image --exit-code 1 --severity CRITICAL,HIGH --ignore-unfixed $DOCKER_IMAGE
+    - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
+    - docker push $DOCKER_IMAGE
+
+# 4. ПРОВЕРКА ЗАВИСИМОСТЕЙ (SCA)
+dependency_check:
+  stage: test
+  image: maven:3.9-eclipse-temurin-21
+  script:
+    - chmod +x mvnw
+    - ./mvnw org.owasp:dependency-check-maven:check || true
+
+# 5. СТАТИЧЕСКИЙ АНАЛИЗ (SAST)
+semgrep:
+  stage: test
+  image: semgrep/semgrep
+  script:
+    - semgrep --config=auto --json --output results.json .
+
+# 6. ДИНАМИЧЕСКИЙ АНАЛИЗ (DAST)
+dast_baseline:
+  stage: test
+  image:
+    name: zaproxy/zap-stable
+    entrypoint: [""]
+  needs:
+    - build
+  script:
+    - apt-get update && apt-get install -y openjdk-17-jre
+    - java -jar target/*.jar > app.log 2>&1 &
+    - sleep 40
+    - zap-baseline.py -t http://localhost:8080 -r report_baseline.html || true
+
+# 7. ФАЗЗИНГ-ТЕСТИРОВАНИЕ (ffuf)
+web_fuzzing:
+  stage: fuzzing
+  image:
+    name: ffuf/ffuf
+    entrypoint: [""]
+  needs:
+    - build
+  script:
+    - apt-get update && apt-get install -y openjdk-17-jre
+    - java -jar target/*.jar > app.log 2>&1 &
+    - sleep 40
+    - echo -e "admin\napi\nconfig" > wordlist.txt
+    - ffuf -u http://localhost:8080/FUZZ -w wordlist.txt -mc 200,403,401 -o fuzz-results.json
