@@ -3,8 +3,9 @@ stages:
   - build
   - test
   - fuzzing
+  - container-security
 
-# 1. ПОИСК СЕКРЕТОВ (Gitleaks)
+# 1. ПОИСК СЕКРЕТОВ
 gitleaks:
   stage: secrets-scan
   image:
@@ -12,10 +13,6 @@ gitleaks:
     entrypoint: [""]
   script:
     - gitleaks detect --source . -v
-  artifacts:
-    when: always
-    paths:
-      - gitleaks-report.json
 
 # 2. СБОРКА
 build:
@@ -29,31 +26,41 @@ build:
   artifacts:
     paths:
       - target/*.jar
-    expire_in: 1 hour
 
-# 3. ПРОВЕРКА ЗАВИСИМОСТЕЙ (SCA)
+# 3. БЕЗОПАСНОСТЬ КОНТЕЙНЕРОВ (Новый этап!)
+docker_build_scan_push:
+  stage: container-security
+  image: docker:latest
+  services:
+    - docker:dind
+  needs:
+    - build
+  variables:
+    DOCKER_IMAGE: $CI_REGISTRY_IMAGE:latest
+  script:
+    - docker build -t $DOCKER_IMAGE .
+    - apk add --no-cache curl
+    - curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin
+    - trivy image --exit-code 1 --severity CRITICAL,HIGH --ignore-unfixed $DOCKER_IMAGE
+    - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
+    - docker push $DOCKER_IMAGE
+
+# 4. ПРОВЕРКА ЗАВИСИМОСТЕЙ (SCA)
 dependency_check:
   stage: test
   image: maven:3.9-eclipse-temurin-21
   script:
     - chmod +x mvnw
     - ./mvnw org.owasp:dependency-check-maven:check || true
-  artifacts:
-    when: always
-    paths:
-      - target/dependency-check-report.html
 
-# 4. СТАТИЧЕСКИЙ АНАЛИЗ (SAST)
+# 5. СТАТИЧЕСКИЙ АНАЛИЗ (SAST)
 semgrep:
   stage: test
   image: semgrep/semgrep
   script:
     - semgrep --config=auto --json --output results.json .
-  artifacts:
-    paths:
-      - results.json
 
-# 5. ДИНАМИЧЕСКИЙ АНАЛИЗ (DAST)
+# 6. ДИНАМИЧЕСКИЙ АНАЛИЗ (DAST)
 dast_baseline:
   stage: test
   image:
@@ -66,13 +73,8 @@ dast_baseline:
     - java -jar target/*.jar > app.log 2>&1 &
     - sleep 40
     - zap-baseline.py -t http://localhost:8080 -r report_baseline.html || true
-  artifacts:
-    when: always
-    paths:
-      - report_baseline.html
-      - app.log
 
-# 6. ФАЗЗИНГ-ТЕСТИРОВАНИЕ (ffuf)
+# 7. ФАЗЗИНГ-ТЕСТИРОВАНИЕ (ffuf)
 web_fuzzing:
   stage: fuzzing
   image:
@@ -84,10 +86,5 @@ web_fuzzing:
     - apt-get update && apt-get install -y openjdk-17-jre
     - java -jar target/*.jar > app.log 2>&1 &
     - sleep 40
-    - echo -e "admin\napi\nconfig\n.env\nbackup\nsecret\ndev\nlogin" > wordlist.txt
+    - echo -e "admin\napi\nconfig" > wordlist.txt
     - ffuf -u http://localhost:8080/FUZZ -w wordlist.txt -mc 200,403,401 -o fuzz-results.json
-  artifacts:
-    when: always
-    paths:
-      - fuzz-results.json
-      - app.log

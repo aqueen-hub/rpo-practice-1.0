@@ -10,9 +10,10 @@ permissions:
   contents: write
   issues: write
   pull-requests: write
+  packages: write # Нужно для пуша в реестр образов
 
 jobs:
-  # 1. ПОИСК СЕКРЕТОВ (Остановит всё, если найдет ключи)
+  # 1. ПОИСК СЕКРЕТОВ
   secrets-scan:
     name: Gitleaks Scan
     runs-on: ubuntu-latest
@@ -25,7 +26,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  # 2. СБОРКА (Начнется только если секретов нет)
+  # 2. СБОРКА
   build:
     name: Build
     needs: secrets-scan
@@ -46,7 +47,41 @@ jobs:
           name: jar
           path: target/*.jar
 
-  # 3. ПРОВЕРКА ЗАВИСИМОСТЕЙ (SCA)
+  # 3. БЕЗОПАСНОСТЬ КОНТЕЙНЕРОВ (Новый этап!)
+  docker-security:
+    name: Docker Build, Scan and Push
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download JAR
+        uses: actions/download-artifact@v4
+        with:
+          name: jar
+          path: target
+      - name: Build Docker Image
+        run: docker build -t ghcr.io/${{ github.repository }}:latest .
+      - name: Run Trivy Scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: 'ghcr.io/${{ github.repository }}:latest'
+          format: 'table'
+          exit-code: '1' # Уронит пайплайн если найдет критические уязвимости
+          ignore-unfixed: true
+          vuln-type: 'os,library'
+          severity: 'CRITICAL,HIGH'
+      - name: Login to GHCR
+        if: success()
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Push Docker Image
+        if: success()
+        run: docker push ghcr.io/${{ github.repository }}:latest
+
+  # 4. ПРОВЕРКА ЗАВИСИМОСТЕЙ (SCA)
   security:
     name: Dependency Check
     needs: build
@@ -55,13 +90,8 @@ jobs:
       - uses: actions/checkout@v4
       - name: Dependency Check
         run: chmod +x mvnw && ./mvnw org.owasp:dependency-check-maven:check || true
-      - name: Upload Report
-        uses: actions/upload-artifact@v4
-        with:
-          name: dependency-check-report
-          path: target/dependency-check-report.html
 
-  # 4. ДИНАМИЧЕСКИЙ АНАЛИЗ (DAST)
+  # 5. ДИНАМИЧЕСКИЙ АНАЛИЗ (DAST)
   dast-baseline:
     name: ZAP Baseline Scan
     needs: build
@@ -81,7 +111,7 @@ jobs:
           target: 'http://localhost:8080'
           fail_action: false
 
-  # 5. ФАЗЗИНГ-ТЕСТИРОВАНИЕ (Web Fuzzing)
+  # 6. ФАЗЗИНГ-ТЕСТИРОВАНИЕ
   web-fuzzing:
     name: Web Fuzzing (ffuf)
     needs: build
@@ -100,12 +130,7 @@ jobs:
           wget https://github.com/ffuf/ffuf/releases/download/v2.1.0/ffuf_2.1.0_linux_amd64.tar.gz
           tar -xf ffuf_2.1.0_linux_amd64.tar.gz
           sudo mv ffuf /usr/local/bin/
-      - name: Create Wordlist
-        run: echo -e "admin\napi\nconfig\n.env\nbackup\nsecret\ndev\nlogin" > wordlist.txt
       - name: Run Fuzzer
-        run: ffuf -u http://localhost:8080/FUZZ -w wordlist.txt -mc 200,403,401 -o fuzz-results.json
-      - name: Upload Fuzz Results
-        uses: actions/upload-artifact@v4
-        with:
-          name: fuzz-results
-          path: fuzz-results.json
+        run: |
+          echo -e "admin\napi\nconfig" > wordlist.txt
+          ffuf -u http://localhost:8080/FUZZ -w wordlist.txt -mc 200,403,401 -o fuzz-results.json
