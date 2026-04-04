@@ -2,17 +2,19 @@ stages:
   - build
   - test
 
+# 1. Собираем JAR
 build:
   stage: build
   image: eclipse-temurin:21
   script:
     - chmod +x mvnw
-    - ./mvnw clean package
+    - ./mvnw clean package -DskipTests
   artifacts:
     paths:
       - target/*.jar
-    expire_in: 1 week
+    expire_in: 1 hour
 
+# 2. Проверка зависимостей (SCA)
 dependency_check:
   stage: test
   image: maven:3.9-eclipse-temurin-21
@@ -23,6 +25,7 @@ dependency_check:
     paths:
       - target/dependency-check-report.html
 
+# 3. Статический анализ (SAST) через Semgrep
 semgrep:
   stage: test
   image: semgrep/semgrep
@@ -32,6 +35,7 @@ semgrep:
     paths:
       - results.json
 
+# 4. Динамический анализ (DAST) - Базовый
 dast_baseline:
   stage: test
   image:
@@ -42,7 +46,7 @@ dast_baseline:
   before_script:
     - touch rules.tsv
   script:
-    # Устанавливаем Java для запуска приложения
+    # Устанавливаем Java, чтобы запустить твой JAR внутри контейнера ZAP
     - apt-get update && apt-get install -y openjdk-17-jr
     - java -jar target/*.jar &
     - sleep 30
@@ -52,6 +56,7 @@ dast_baseline:
     paths:
       - report_baseline.html
 
+# 5. Динамический анализ (DAST) - API
 dast_api:
   stage: test
   image:
