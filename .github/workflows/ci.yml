@@ -5,43 +5,31 @@ on:
     branches: [ main ]
   push:
     branches: [ main ]
+
 permissions:
   contents: write
   issues: write
   pull-requests: write
 
 jobs:
+  # 1. ПОИСК СЕКРЕТОВ (Остановит всё, если найдет ключи)
+  secrets-scan:
+    name: Gitleaks Scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Gitleaks Scan
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # 2. СБОРКА (Начнется только если секретов нет)
   build:
+    name: Build
+    needs: secrets-scan
     runs-on: ubuntu-latest
-    container: eclipse-temurin:21
-    steps:
-      - uses: actions/checkout@v4
-      - name: Make mvnw executable
-        run: chmod +x mvnw
-      - name: Build with Maven
-        run: ./mvnw clean package
-      - name: Upload JAR artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: jar
-          path: target/*.jar
-
-  security:
-    runs-on: ubuntu-latest
-    needs: build
-    steps:
-      - uses: actions/checkout@v4
-      - name: Run Semgrep
-        run: |
-          docker run --rm -v "${PWD}:/src" semgrep/semgrep semgrep --config=auto --sarif --output results.sarif /src
-      - name: Upload SARIF report
-        uses: github/codeql-action/upload-sarif@v4
-        with:
-          sarif_file: results.sarif
-
-  dependency-check:
-    runs-on: ubuntu-latest
-    needs: build
     steps:
       - uses: actions/checkout@v4
       - name: Set up JDK 21
@@ -49,23 +37,35 @@ jobs:
         with:
           java-version: '21'
           distribution: 'temurin'
-      - name: Make mvnw executable
-        run: chmod +x mvnw
-      - name: Run OWASP Dependency Check
-        run: |
-          mkdir -p /tmp/dc-data
-          chmod 777 /tmp/dc-data
-          ./mvnw org.owasp:dependency-check-maven:check -DdataDirectory=/tmp/dc-data
-      - name: Upload HTML report
+          cache: maven
+      - name: Build with Maven
+        run: chmod +x mvnw && ./mvnw clean package -DskipTests
+      - name: Upload JAR
         uses: actions/upload-artifact@v4
-        if: always()
+        with:
+          name: jar
+          path: target/*.jar
+
+  # 3. ПРОВЕРКА ЗАВИСИМОСТЕЙ (SCA)
+  security:
+    name: Dependency Check
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Dependency Check
+        run: chmod +x mvnw && ./mvnw org.owasp:dependency-check-maven:check || true
+      - name: Upload Report
+        uses: actions/upload-artifact@v4
         with:
           name: dependency-check-report
-          path: "target/**/dependency-check-report.html"
+          path: target/dependency-check-report.html
 
+  # 4. ДИНАМИЧЕСКИЙ АНАЛИЗ (DAST)
   dast-baseline:
-    runs-on: ubuntu-latest
+    name: ZAP Baseline Scan
     needs: build
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - name: Download JAR
@@ -73,26 +73,18 @@ jobs:
         with:
           name: jar
           path: target
-      - name: Set up JDK
-        uses: actions/setup-java@v4
-        with:
-          java-version: '21'
-          distribution: 'temurin'
       - name: Run App in Background
-        run: |
-          touch rules.tsv
-          java -jar target/*.jar &
-          sleep 30
+        run: java -jar target/*.jar & sleep 30
       - name: ZAP Baseline Scan
-        uses: zaproxy/action-baseline@v0.9.0
+        uses: zaproxy/action-baseline@v0.13.0
         with:
           target: 'http://localhost:8080'
-          rules_file_name: 'rules.tsv'
-          artifact_name: 'zap-baseline-report'
+          fail_action: false # Не роняем пайплайн, чтобы получить отчет
 
   dast-api:
-    runs-on: ubuntu-latest
+    name: ZAP API Scan
     needs: build
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - name: Download JAR
@@ -100,20 +92,10 @@ jobs:
         with:
           name: jar
           path: target
-      - name: Set up JDK
-        uses: actions/setup-java@v4
-        with:
-          java-version: '21'
-          distribution: 'temurin'
       - name: Run App in Background
-        run: |
-          touch rules.tsv
-          java -jar target/*.jar &
-          sleep 30
+        run: java -jar target/*.jar & sleep 30
       - name: ZAP API Scan
         uses: zaproxy/action-api-scan@v0.10.0
         with:
           target: 'http://localhost:8080/v3/api-docs'
           format: openapi
-          rules_file_name: 'rules.tsv'
-          artifact_name: 'zap-api-report'

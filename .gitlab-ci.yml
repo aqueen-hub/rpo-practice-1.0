@@ -1,10 +1,27 @@
 stages:
+  - secrets-scan
   - build
   - test
 
+# 1. ПОИСК СЕКРЕТОВ
+gitleaks:
+  stage: secrets-scan
+  image:
+    name: gitleaks/gitleaks:latest
+    entrypoint: [""]
+  script:
+    - gitleaks detect --source . -v
+  artifacts:
+    when: always
+    paths:
+      - gitleaks-report.json
+
+# 2. СБОРКА
 build:
   stage: build
   image: eclipse-temurin:21
+  needs:
+    - gitleaks
   script:
     - chmod +x mvnw
     - ./mvnw clean package -DskipTests
@@ -13,6 +30,7 @@ build:
       - target/*.jar
     expire_in: 1 hour
 
+# 3. ПРОВЕРКА ЗАВИСИМОСТЕЙ (SCA)
 dependency_check:
   stage: test
   image: maven:3.9-eclipse-temurin-21
@@ -24,6 +42,7 @@ dependency_check:
     paths:
       - target/dependency-check-report.html
 
+# 4. СТАТИЧЕСКИЙ АНАЛИЗ (SAST)
 semgrep:
   stage: test
   image: semgrep/semgrep
@@ -33,6 +52,7 @@ semgrep:
     paths:
       - results.json
 
+# 5. ДИНАМИЧЕСКИЙ АНАЛИЗ (DAST)
 dast_baseline:
   stage: test
   image:
@@ -42,10 +62,8 @@ dast_baseline:
     - build
   script:
     - apt-get update && apt-get install -y openjdk-17-jre
-    # Запускаем именно основной JAR, логи пишем в файл для отладки
     - java -jar target/*.jar > app.log 2>&1 &
     - sleep 40
-    # Самое важное: добавляем || true, чтобы работа не падала из-за найденных уязвимостей
     - zap-baseline.py -t http://localhost:8080 -r report_baseline.html || true
   artifacts:
     when: always
@@ -64,7 +82,6 @@ dast_api:
     - apt-get update && apt-get install -y openjdk-17-jre
     - java -jar target/*.jar > app.log 2>&1 &
     - sleep 40
-    # Сканируем API и тоже не падаем при варнингах
     - zap-api-scan.py -t http://localhost:8080/v3/api-docs -f openapi -r report_api.html || true
   artifacts:
     when: always
