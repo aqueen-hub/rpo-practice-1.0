@@ -2,8 +2,9 @@ stages:
   - secrets-scan
   - build
   - test
+  - fuzzing
 
-# 1. ПОИСК СЕКРЕТОВ
+# 1. ПОИСК СЕКРЕТОВ (Gitleaks)
 gitleaks:
   stage: secrets-scan
   image:
@@ -71,10 +72,11 @@ dast_baseline:
       - report_baseline.html
       - app.log
 
-dast_api:
-  stage: test
+# 6. ФАЗЗИНГ-ТЕСТИРОВАНИЕ (ffuf)
+web_fuzzing:
+  stage: fuzzing
   image:
-    name: zaproxy/zap-stable
+    name: ffuf/ffuf
     entrypoint: [""]
   needs:
     - build
@@ -82,9 +84,10 @@ dast_api:
     - apt-get update && apt-get install -y openjdk-17-jre
     - java -jar target/*.jar > app.log 2>&1 &
     - sleep 40
-    - zap-api-scan.py -t http://localhost:8080/v3/api-docs -f openapi -r report_api.html || true
+    - echo -e "admin\napi\nconfig\n.env\nbackup\nsecret\ndev\nlogin" > wordlist.txt
+    - ffuf -u http://localhost:8080/FUZZ -w wordlist.txt -mc 200,403,401 -o fuzz-results.json
   artifacts:
     when: always
     paths:
-      - report_api.html
+      - fuzz-results.json
       - app.log

@@ -79,10 +79,11 @@ jobs:
         uses: zaproxy/action-baseline@v0.13.0
         with:
           target: 'http://localhost:8080'
-          fail_action: false # Не роняем пайплайн, чтобы получить отчет
+          fail_action: false
 
-  dast-api:
-    name: ZAP API Scan
+  # 5. ФАЗЗИНГ-ТЕСТИРОВАНИЕ (Web Fuzzing)
+  web-fuzzing:
+    name: Web Fuzzing (ffuf)
     needs: build
     runs-on: ubuntu-latest
     steps:
@@ -94,8 +95,17 @@ jobs:
           path: target
       - name: Run App in Background
         run: java -jar target/*.jar & sleep 30
-      - name: ZAP API Scan
-        uses: zaproxy/action-api-scan@v0.10.0
+      - name: Install ffuf
+        run: |
+          wget https://github.com/ffuf/ffuf/releases/download/v2.1.0/ffuf_2.1.0_linux_amd64.tar.gz
+          tar -xf ffuf_2.1.0_linux_amd64.tar.gz
+          sudo mv ffuf /usr/local/bin/
+      - name: Create Wordlist
+        run: echo -e "admin\napi\nconfig\n.env\nbackup\nsecret\ndev\nlogin" > wordlist.txt
+      - name: Run Fuzzer
+        run: ffuf -u http://localhost:8080/FUZZ -w wordlist.txt -mc 200,403,401 -o fuzz-results.json
+      - name: Upload Fuzz Results
+        uses: actions/upload-artifact@v4
         with:
-          target: 'http://localhost:8080/v3/api-docs'
-          format: openapi
+          name: fuzz-results
+          path: fuzz-results.json
