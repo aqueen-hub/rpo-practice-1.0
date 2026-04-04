@@ -19,6 +19,7 @@ dependency_check:
   stage: test
   image: maven:3.9-eclipse-temurin-21
   script:
+    - chmod +x mvnw  # Даем права на запуск
     - ./mvnw org.owasp:dependency-check-maven:check
   artifacts:
     when: always
@@ -30,7 +31,8 @@ semgrep:
   stage: test
   image: semgrep/semgrep
   script:
-    - semgrep --config=auto --json --output results.json
+    # Добавляем точку в конце, чтобы он сканировал текущую директорию
+    - semgrep --config=auto --json --output results.json .
   artifacts:
     paths:
       - results.json
@@ -46,8 +48,8 @@ dast_baseline:
   before_script:
     - touch rules.tsv
   script:
-    # Устанавливаем Java, чтобы запустить твой JAR внутри контейнера ZAP
-    - apt-get update && apt-get install -y openjdk-17-jr
+    # Исправлено: ставим openjdk-17-jre (с буквой 'e' на конце)
+    - apt-get update && apt-get install -y openjdk-17-jre
     - java -jar target/*.jar &
     - sleep 30
     - zap-baseline.py -t http://localhost:8080 -c rules.tsv -r report_baseline.html
@@ -67,7 +69,7 @@ dast_api:
   before_script:
     - touch rules.tsv
   script:
-    - apt-get update && apt-get install -y openjdk-17-jr
+    - apt-get update && apt-get install -y openjdk-17-jre
     - java -jar target/*.jar &
     - sleep 30
     - zap-api-scan.py -t http://localhost:8080/v3/api-docs -f openapi -c rules.tsv -r report_api.html
